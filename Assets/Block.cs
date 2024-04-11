@@ -28,8 +28,7 @@ public class Block : MonoBehaviour
             return $"Block_{index} (x:{x},y:{y})";
         }
     }
-
-    public Sprite[] animalSprites;
+        
     public Info info;
 
     private SpriteRenderer spriteRenderer;
@@ -51,12 +50,13 @@ public class Block : MonoBehaviour
         this.id = id;
         if (spriteRenderer == null)
             spriteRenderer = GetComponent<SpriteRenderer>();
-        spriteRenderer.sprite = animalSprites[(int)id];
+        spriteRenderer.sprite = BlockPanel.Instance.GetSprite(id);
+        spriteRenderer.maskInteraction = SpriteMaskInteraction.VisibleInsideMask;
     }
 
-    // 마우스를 클릭한 뒤 드래그 했을 경우
-    bool isPressed;
-    Vector2 pressPoint;
+    
+    bool isPressed;             // 블록이 눌렸는지 여부
+    Vector2 pressPoint;         // 블록이 눌린 위치
 
     private void OnMouseDown()
     {
@@ -78,9 +78,13 @@ public class Block : MonoBehaviour
             isPressed = false;
             Vector2 dir = current - pressPoint;
             if (Mathf.Abs(dir.x) > Mathf.Abs(dir.y))
-                BlockPanel.Instance.SwapBlock(info.index, dir.x < 0 ? VECTOR.LEFT : VECTOR.RIGHT);
+                BlockPanel.Instance.SlideBlock(info.index, dir.x < 0 ? VECTOR.LEFT : VECTOR.RIGHT);
             else
-                BlockPanel.Instance.SwapBlock(info.index, dir.y < 0 ? VECTOR.DOWN : VECTOR.UP); 
+                BlockPanel.Instance.SlideBlock(info.index, dir.y < 0 ? VECTOR.DOWN : VECTOR.UP); 
         }
     }        
+    private void OnMouseUp()
+    {
+        isPressed = false;
+    }
 }

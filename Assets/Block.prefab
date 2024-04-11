@@ -144,9 +144,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   id: 0
-  index: 0
-  x: 0
-  y: 0
   animalSprites:
   - {fileID: 21300000, guid: 0bda3c4395410e84a86071689f4e6391, type: 3}
   - {fileID: 21300000, guid: 5f6bf734ffdb4f94fb880ba1104a443d, type: 3}
