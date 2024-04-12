@@ -2,7 +2,10 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using Unity.Burst.Intrinsics;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+using static Unity.Collections.AllocatorManager;
 
 public enum VECTOR
 {
@@ -37,9 +40,11 @@ public class GameManager : MonoBehaviour
     const int BLOCK_HEIGHT = 7;
 
     [SerializeField] Block blockPrefab;
+    [SerializeField] BombBlock bombBlockPrefab;
     [SerializeField] GameUI gameUI;
     [SerializeField] AudioPlayer audioPlayer;
     [SerializeField] ParticleSystem popFxPrefab;
+    [SerializeField] LeaderBoard leaderBoard;
     [SerializeField] Sprite[] animalSprites;
 
 
@@ -49,11 +54,20 @@ public class GameManager : MonoBehaviour
     float currentTime;              // 현재 시간.
     int score;                      // 점수.
 
-    bool isLockTime;                // 시간의 흐름 막기.
-    bool isLockBlock;               // 유저 컨트롤 막기.
-    bool isGameOver;                // 게임 오버 여부.
+    const float MAX_BOMB = 200;     // 최대 폭탄 게이지.
+    float currentBomb;              // 현재 폭탄 게이지.
+    bool createBomb;                // 폭탄 생성 개수.
+
+    const float MAX_COMBO_TIME = 3f;    // 콤보 시간.
+    float comboTime;                    // 콤보 시간.   
+    int combo;                          // 콤보 횟수.
+
+    bool isLockTime;                    // 시간의 흐름 막기.
+    bool isLockBlock;                   // 유저 컨트롤 막기.
+    bool isGameOver;                    // 게임 오버 여부.
 
     public bool IsLockBlock => isLockBlock || isGameOver;
+    public int Combo => combo;
 
     private void Awake()
     {
@@ -64,25 +78,53 @@ public class GameManager : MonoBehaviour
         GenerateBlock();
 
         currentTime = MAX_TIME;
-        isLockBlock = false;
-        isLockTime = false;
+        isLockBlock = true;
+        isLockTime = true;
         isGameOver = false;
 
-        audioPlayer.SwitchBGM(true);
     }
+    public void OnStartGame()
+    {
+        StartCoroutine(IEStartGame());
+    }
+    private IEnumerator IEStartGame()
+    {
+        float timer = 3f;
+        while (timer > 0.0f)
+        {
+            timer -= Time.deltaTime;
+            gameUI.UpdateStartTimer(timer);
+            yield return null;
+        }
+        gameUI.UpdateStartTimer(0);
+
+        audioPlayer.SwitchBGM(true);
+        isLockBlock = false;
+        isLockTime = false;
+    }
+
+
+
     private void Update()
     {
         if (!isGameOver)
         {
             if (!isLockTime)
+            {
                 currentTime = Mathf.Clamp(currentTime - Time.deltaTime, 0.0f, MAX_TIME);
+                comboTime = Mathf.Clamp(comboTime - Time.deltaTime, 0.0f, MAX_COMBO_TIME);
+            }
 
             // UI 갱신.
+            gameUI.UpdateBomb(currentBomb, MAX_BOMB);
             gameUI.UpdateTimer(currentTime, MAX_TIME);
             gameUI.UpdateScore(score);
 
             // 게임 오버 체크.
+            combo = comboTime <= 0.0f ? 0 : combo;
             isGameOver = currentTime <= 0.0f;
+            if (isGameOver)
+                StartCoroutine(GameOver());
         }
     }
 
@@ -128,6 +170,13 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    private IEnumerator GameOver()
+    {
+        gameUI.UpdatePopup("GAME OVER");
+        yield return new WaitForSeconds(2.0f);
+        int rank = leaderBoard.AddScore(score);
+        leaderBoard.SwitchScore(true, rank);
+    }
 
     // 연결된 블록 가져오기
     private BlockGroup SearchGroup(Block block, bool isHorizontal)
@@ -145,7 +194,7 @@ public class GameManager : MonoBehaviour
                 List<Block> check = new List<Block>();
                 for (int i = index; i <= maxIndex; i += addValue)
                 {
-                    if (panelBlocks[i] == null || block.id != panelBlocks[i].id)
+                    if (panelBlocks[i] == null || !block.MatchBlock(panelBlocks[i]))
                         break;
 
                     check.Add(panelBlocks[i]);
@@ -199,6 +248,39 @@ public class GameManager : MonoBehaviour
         return animalSprites[(int)id];
     }
 
+
+
+
+    // 폭탄 사용
+    public void UseBomb(Block block)
+    {
+        StartCoroutine(IEUseBomb(block));
+    }
+    public IEnumerator IEUseBomb(Block block)
+    {
+        isLockBlock = true;
+        isLockTime = true;
+
+        yield return StartCoroutine(IERemoveBlockAtferBomb(block));
+        yield return StartCoroutine(IEMediate());
+
+        // 이후부터는 모든 블록을 대상으로 매칭시켜본다.
+        int continuously = 0;
+        while (true)
+        {
+            Block[] matchBlocks = MatchBlocks(panelBlocks);
+            if (matchBlocks.Length < 3)
+                break;
+
+            yield return StartCoroutine(IERemovePanelBlock(matchBlocks, continuously++));
+            yield return StartCoroutine(IEMediate());
+        }
+
+        isLockTime = false;
+        isLockBlock = false;
+    }
+
+
     // 블록 교환 함수.
     public void SlideBlock(int index, VECTOR dir)
     {
@@ -238,12 +320,13 @@ public class GameManager : MonoBehaviour
         // 매치가 되었다면 블록을 삭제한 뒤 빈 블록을 채운다.
         Block[] matchBlocks = MatchBlocks(block, targetBlock);
         
+
         if (matchBlocks.Length >= 3)
         { 
-            int combo = 1;
             isLockTime = true;
+            int continuously = 0;
 
-            yield return StartCoroutine(IERemoveBlocks(matchBlocks, combo));
+            yield return StartCoroutine(IERemovePanelBlock(matchBlocks, continuously++));
             yield return StartCoroutine(IEMediate());
 
             // 이후부터는 모든 블록을 대상으로 매칭시켜본다.
@@ -253,8 +336,7 @@ public class GameManager : MonoBehaviour
                 if(matchBlocks.Length < 3)
                     break;
 
-                combo += 1;
-                yield return StartCoroutine(IERemoveBlocks(matchBlocks, combo));
+                yield return StartCoroutine(IERemovePanelBlock(matchBlocks, continuously++));
                 yield return StartCoroutine(IEMediate());
             }
         }
@@ -280,30 +362,100 @@ public class GameManager : MonoBehaviour
 
         SwapBlock(blockA.info.index, blockB.info.index);
     }
-    private IEnumerator IERemoveBlocks(Block[] removeBlocks, int combo)
-    {
-        audioPlayer.PopBlock();
-        score += CalculateScore(removeBlocks.Length, combo);
-        foreach(Block block in removeBlocks)
-            Instantiate(popFxPrefab, block.transform.position, Quaternion.identity);
 
-        yield return new WaitForSeconds(0.15f);
-        foreach (Block block in removeBlocks)
+    // 블록 삭제 함수.
+    IEnumerator IERemoveBlockAtferBomb(Block block)
+    {
+        yield return new WaitForSeconds(0.2f);
+
+        int top = block.info.x;
+        int index = top;
+
+        // 수직으로 블록 삭제
+        while (index < panelBlocks.Length)
         {
-            panelBlocks[block.info.index] = null;
-            Destroy(block.gameObject);
+            StartCoroutine(IERemoveBlock(panelBlocks[index]));
+            yield return new WaitForSeconds(0.12f);
+            index += BLOCK_WIDTH;
         }
+
+        CalculateAfterBlock(BLOCK_WIDTH + BLOCK_HEIGHT - 1, 0, true);
+
+        int bottom = top + (BLOCK_WIDTH * (BLOCK_HEIGHT - 1));
+        int min = BLOCK_WIDTH * (BLOCK_HEIGHT - 1);
+        int max = BLOCK_WIDTH * BLOCK_HEIGHT - 1;
+        int left = bottom - 1;
+        int right = bottom + 1;
+
+        // 수평 이동.
+        while (left >= min || max >= right)
+        {
+            if (left >= min)
+            {
+                StartCoroutine(IERemoveBlock(panelBlocks[left]));
+                left -= 1;
+            }
+            if (right <= max)
+            {
+                StartCoroutine(IERemoveBlock(panelBlocks[right]));
+                right += 1;
+            }
+
+            yield return new WaitForSeconds(0.17f);
+        }
+    }
+    IEnumerator IERemovePanelBlock(Block[] removeBlocks, int continuously)
+    {
+        // 사운드 재생, 스코어 및 폭탄 게이지 계산.
+        audioPlayer.PopBlock();
+        CalculateAfterBlock(removeBlocks.Length, continuously, false);
+
+        foreach (Block block in removeBlocks)
+            StartCoroutine(IERemoveBlock(block));
+
         yield return new WaitForSeconds(0.2f);
     }
-    private int CalculateScore(int blockCount, int combo)
+    IEnumerator IERemoveBlock(Block block)
     {
-        // 3블록 250 > 이후 1블록 추가마다 100씩 추가
-        // 콤보당 보너스 점수 +20%
-        int addBlock = blockCount - 3;
-        return Mathf.RoundToInt((250 + (100 * addBlock)) * (1 + ((combo - 1) * 0.2f)));
+        Instantiate(popFxPrefab, block.transform.position, Quaternion.identity);
+        yield return new WaitForSeconds(0.15f);
+        panelBlocks[block.info.index] = null;
+        Destroy(block.gameObject);
     }
 
+    // 점수 계산.s
+    void CalculateAfterBlock(int removeLength, int continuously, bool useBomb)
+    {
+        // 콤보 시간 갱신.
+        if (comboTime > 0f)
+            combo += 1;
+        comboTime = MAX_COMBO_TIME;
 
+        // 연속으로 터트릴 시 20%의 보너스, 콤보당 5%의 보너스
+        int addBlock = removeLength - 3;
+        float comboBonus = (1 + ((combo - 1) * 0.05f));
+        float continueBonus = (1 + (continuously * 0.2f));
+
+        // 3블록 250 > 이후 1블록 추가마다 100씩 추가, 콤보당 보너스 점수 +20%
+        float addScore = (250 + (100 * addBlock)) * (comboBonus + continueBonus);
+        score += Mathf.RoundToInt(addScore);
+
+        // 폭탄 비 사용.
+        if (!useBomb)
+        {
+            // 3블록 10 > 이후 1블록 추가마다 5씩 추가
+            float addBomb = (10 + (5 * addBlock)) * (comboBonus + continueBonus);
+            currentBomb += Mathf.RoundToInt(addBomb);
+            if (currentBomb >= MAX_BOMB)
+            {
+                currentBomb %= MAX_BOMB;
+                createBomb = true;
+            }
+        }
+    }
+
+   
+    // 블록 조정하기.
     IEnumerator IEMediate()
     {
         MediateEmptySpace();        // MatchBlockToRemove()로 인해 빈 공간이 발생했을 경우 블록을 내린다.
@@ -364,21 +516,35 @@ public class GameManager : MonoBehaviour
         }
 
         // 모든 빈 블록을 기준으로 새로운 블록을 생성한다.
-        for (int index = 0; index < panelBlocks.Length; index++)
+        var emptyIndex = panelBlocks.Select((block, index) => new { block, index })
+                                    .Where(pair => pair.block == null)
+                                    .Select(pair => pair.index)
+                                    .ToList();
+        int bombIndex = -1;
+        if (createBomb)
+        {
+            bombIndex = emptyIndex.ElementAt(Random.Range(0, emptyIndex.Count()));
+            createBomb = false;
+        }
+
+        // 모든 빈 인덱스를 돌면서 새로운 블록 생성.
+        foreach(int index in emptyIndex)
         {
             if (panelBlocks[index] != null)
                 continue;
 
             // 생성된 빈 블록이 속한 x축 라인의 빈 개수에 따라 위치를 올린다.
-            Block newBlock = CreateNewBlock(index);
+            Block newBlock = CreateNewBlock(index, index == bombIndex);
             newBlock.transform.localPosition += Vector3.up * emptyCounts[index % BLOCK_WIDTH];
             panelBlocks[index] = newBlock;
         }
     }
 
-    private Block CreateNewBlock(int index)
+    // 블록 생성 및 교환하기.
+    private Block CreateNewBlock(int index, bool isBomb = false)
     {
-        Block block = Instantiate(blockPrefab, transform);
+        Block prefab = isBomb ? bombBlockPrefab : blockPrefab;
+        Block block = Instantiate(prefab, transform);
         block.Setup(index, index % BLOCK_WIDTH, index / BLOCK_WIDTH);
 
         // 블록의 위치와 크기를 설정한다.
@@ -411,4 +577,12 @@ public class GameManager : MonoBehaviour
             blockB.name = blockB.info.ToString();
         }
     }
+
+
+
+    public void OnRetryGame()
+    {
+        SceneManager.LoadScene("Game");
+    }
+
 }

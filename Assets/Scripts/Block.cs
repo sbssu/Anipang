@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public enum ANIMAL
@@ -10,13 +11,12 @@ public enum ANIMAL
     PIG,
     RABBIT,
     SNAKE,
-    GIRAFFE,
+    GIRAFFE,    
 }
 
 public class Block : MonoBehaviour
 {
     // 블록은 어떠한 동물인지, 몇번째 index인지, x,y축으로 몇 번 째인지 알아야한다.
-    public ANIMAL id;
     public struct Info
     {
         public int index;
@@ -30,8 +30,9 @@ public class Block : MonoBehaviour
     }
         
     public Info info;
+    ANIMAL id;
 
-    private SpriteRenderer spriteRenderer;
+    protected SpriteRenderer spriteRenderer;
        
     public void Setup(int index, int x, int y)
     {
@@ -39,13 +40,14 @@ public class Block : MonoBehaviour
         name = info.ToString();
         Change();
     }
-    public void Change()
+
+    public virtual void Change()
     {
         ANIMAL[] ids = (ANIMAL[])System.Enum.GetValues(typeof(ANIMAL));
         ANIMAL randomID = ids[Random.Range(0, ids.Length)];
         Change(randomID);
     }
-    public void Change(ANIMAL id)
+    private void Change(ANIMAL id)
     {
         this.id = id;
         if (spriteRenderer == null)
@@ -54,11 +56,24 @@ public class Block : MonoBehaviour
         spriteRenderer.maskInteraction = SpriteMaskInteraction.VisibleInsideMask;
     }
 
-    
+    public bool MatchBlock(Block block)
+    {
+        int mine = GetID();
+        int other = block.GetID();
+
+        if (mine + other < 0)
+            return false;
+        return mine == other;
+    }
+    protected virtual int GetID()
+    {
+        return (int)id;
+    }
+
     bool isPressed;             // 블록이 눌렸는지 여부
     Vector2 pressPoint;         // 블록이 눌린 위치
 
-    private void OnMouseDown()
+    protected virtual void OnMouseDown()
     {
         if(GameManager.Instance.IsLockBlock)
             return;
@@ -66,7 +81,7 @@ public class Block : MonoBehaviour
         isPressed = true;
         pressPoint = Camera.main.ScreenToWorldPoint(Input.mousePosition);
     }
-    private void OnMouseDrag()
+    protected virtual void OnMouseDrag()
     {
         if (GameManager.Instance.IsLockBlock || !isPressed)
             return;
@@ -83,7 +98,7 @@ public class Block : MonoBehaviour
                 GameManager.Instance.SlideBlock(info.index, dir.y < 0 ? VECTOR.DOWN : VECTOR.UP); 
         }
     }        
-    private void OnMouseUp()
+    protected virtual void OnMouseUp()
     {
         isPressed = false;
     }
